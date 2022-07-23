@@ -2,12 +2,13 @@
     "compilerOptions": {
         "baseUrl": "./src/",
         "outDir": "./dist/",
+        "declaration": true,
         "sourceMap": true,
         "noImplicitAny": true,
         "module": "commonjs",
-        "target": "ES2017",
+        "target": "ES2021",
         "allowSyntheticDefaultImports": true,
         "esModuleInterop": true
     },
-    "exclude": ["node_modules"]
+    "exclude": ["node_modules", "dist"]
 }

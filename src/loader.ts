@@ -2,9 +2,15 @@
 import path from 'path'
 import { promises as fs } from 'fs'
 import { EventEmitter } from 'events'
+import {
+    ConfigError,
+    FileLoadError,
+    FileNotFoundError,
+    LoadFilesError,
+} from './errors'
 
 const fileExt = path.extname(__filename).toLowerCase()
-const configError = new Error('bad config, failed to initialize loader')
+const configError = new ConfigError()
 
 export type ConstructorType<T> = new (...args: any[]) => T
 
@@ -51,14 +57,18 @@ export class Loader<T, A = T> extends EventEmitter {
     // TODO: Rethink this method of storing metadata
     // The philosophy behind this is that we need to be able to access a file's "name" by the path, and the file path by the "name" in a timely fashion, so two maps are used for *hopefully* the best performance
     // I'm not sure if this will work well at scale in terms of memory usage, but I can't think of other solutions
-    protected nameMap: Map<T, string> // Map<Instance, FileNameWithoutExt> - the instance is used as a key because object references are 8 bytes while a path will almost always be bigger than that
-    protected pathMap: Map<string, string> // Map<FileNameWithoutExt, FilePath>
+    private nameMap: Map<T, string> // Map<Instance, FileNameWithoutExt> - the instance is used as a key because object references are 8 bytes while a path will almost always be bigger than that
+    private pathMap: Map<string, string> // Map<FileNameWithoutExt, FilePath>
 
     public get files(): ReadonlyMap<string, T> {
         return this.fileMap
     }
 
-    public ready = false
+    private _ready = false
+
+    public get ready(): boolean {
+        return this._ready
+    }
 
     constructor(opts: LoaderOptions<T, A>) {
         super()
@@ -87,7 +97,11 @@ export class Loader<T, A = T> extends EventEmitter {
     }
 
     private findConstructor(name: string, mdl: any): ConstructorType<T> | null {
-        return this.classes?.findConstructor?.(name, mdl) || mdl.default
+        if (this.classes?.findConstructor) {
+            return this.classes.findConstructor(name, mdl)
+        } else {
+            return mdl.default
+        }
     }
 
     private findPathFromName(name: string): string | null {
@@ -106,8 +120,15 @@ export class Loader<T, A = T> extends EventEmitter {
             nested = true
         }
 
-        const files = await fs.readdir(locPath)
-        const promises = []
+        let files: string[]
+
+        try {
+            files = await fs.readdir(locPath)
+        } catch (err) {
+            throw new LoadFilesError(err, locPath)
+        }
+
+        const instances: T[] = []
 
         let extname: string
         let filePath: string
@@ -136,15 +157,17 @@ export class Loader<T, A = T> extends EventEmitter {
 
             filePath = path.join(locPath, fileName)
 
-            promises.push(this.loadFromPath(filePath))
+            try {
+                instances.push(await this.loadFromPath(filePath))
+            } catch (err) {
+                this.emit('error', err)
+            }
         }
-
-        const instances = await Promise.all(promises)
 
         this.emit('load-many', instances)
 
-        if (!this.ready) {
-            this.ready = true
+        if (!this._ready) {
+            this._ready = true
             this.emit('ready')
         }
 
@@ -156,7 +179,13 @@ export class Loader<T, A = T> extends EventEmitter {
         name?: string,
         emit = true
     ): Promise<T> {
-        let file = await import(filePath)
+        let file
+
+        try {
+            file = await import(filePath)
+        } catch (err) {
+            throw new FileLoadError(err, filePath)
+        }
 
         if (!name) {
             name = this.extractNameFromFilePath(filePath)
@@ -172,6 +201,7 @@ export class Loader<T, A = T> extends EventEmitter {
             file = new constructor(...this.classes.params)
 
             this.pathMap.set(processName(name), filePath) // note: this is case insensitive
+            this.nameMap.set(file, name)
 
             name = constructor.name
         }
@@ -239,7 +269,7 @@ export class Loader<T, A = T> extends EventEmitter {
         const filePath = this.findPathFromName(name)
 
         if (!filePath) {
-            return Promise.reject('File not found')
+            return Promise.reject(new FileNotFoundError(name))
         }
 
         return this.reloadFromPath(filePath)

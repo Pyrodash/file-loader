@@ -2,6 +2,7 @@
 import path from 'path'
 import { promises as fs } from 'fs'
 import { EventEmitter } from 'events'
+import chokidar from 'chokidar'
 import {
     ConfigError,
     FileLoadError,
@@ -29,6 +30,10 @@ const defaultClassOptions: ClassOptions = {
     params: [],
 }
 
+const defaultWatcherOptions: chokidar.WatchOptions = {
+    persistent: false,
+}
+
 const defaultAllowedExts = ['.js', '.ts']
 
 export interface LoaderOptions<T = unknown, A = T> {
@@ -39,6 +44,8 @@ export interface LoaderOptions<T = unknown, A = T> {
     autoLoad?: boolean
     classes?: ClassOptions<T, A>
     allowedFileExts?: string[]
+    watch?: boolean
+    watchOptions?: chokidar.WatchOptions
 }
 
 export class Loader<T, A = T> extends EventEmitter {
@@ -59,6 +66,10 @@ export class Loader<T, A = T> extends EventEmitter {
     // I'm not sure if this will work well at scale in terms of memory usage, but I can't think of other solutions
     private nameMap: Map<T, string> // Map<Instance, FileNameWithoutExt> - the instance is used as a key because object references are 8 bytes while a path will almost always be bigger than that
     private pathMap: Map<string, string> // Map<FileNameWithoutExt, FilePath>
+
+    private watchOptions: chokidar.WatchOptions
+    private watchList: Map<string, boolean> // map<Directory, IsNested>
+    private watcher: chokidar.FSWatcher
 
     public get files(): ReadonlyMap<string, T> {
         return this.fileMap
@@ -81,6 +92,7 @@ export class Loader<T, A = T> extends EventEmitter {
         this.classes = opts.classes || <ClassOptions<T, A>>defaultClassOptions
         this.allowedFileExts = opts.allowedFileExts || defaultAllowedExts
 
+        this.watchOptions = opts.watchOptions || defaultWatcherOptions
         this.ignored = opts.ignored || []
 
         this.fileMap = new Map()
@@ -91,9 +103,50 @@ export class Loader<T, A = T> extends EventEmitter {
             throw configError
         }
 
+        if (opts.watch) {
+            this.watchList = new Map()
+
+            this.createWatcher()
+        }
+
         if (opts.autoLoad !== false) {
             this.loadFiles()
         }
+    }
+
+    private createWatcher() {
+        this.watcher = chokidar.watch([], this.watchOptions)
+        this.watcher.on('change', (filePath) => {
+            let nested: boolean
+            let relPath: string
+
+            for (const dir of this.watchList.keys()) {
+                if (filePath.startsWith(dir)) {
+                    nested = this.watchList.get(dir)
+                    relPath = filePath.substring(dir.length, filePath.length)
+
+                    if (nested) {
+                        relPath = relPath.substring(
+                            0,
+                            relPath.indexOf(path.sep)
+                        )
+
+                        filePath = this.pathMap.get(relPath)
+                    } else if (
+                        relPath.indexOf(path.sep) !== -1 ||
+                        !this.isFileValid(relPath, nested)
+                    ) {
+                        break
+                    }
+
+                    if (filePath) {
+                        this.reloadFromPath(filePath, false)
+                    }
+
+                    break
+                }
+            }
+        })
     }
 
     private findConstructor(name: string, mdl: any): ConstructorType<T> | null {
@@ -115,6 +168,23 @@ export class Loader<T, A = T> extends EventEmitter {
             : path.basename(filePath, path.extname(filePath))
     }
 
+    private isFileValid(file: string, nested = this.nested): boolean {
+        const extname = path.extname(file)?.toLowerCase()
+
+        if (
+            (nested && extname) ||
+            (!nested && !this.allowedFileExts.includes(extname))
+        ) {
+            return false
+        }
+
+        if (this.ignored.includes(file)) {
+            return false
+        }
+
+        return true
+    }
+
     async loadFiles(locPath = this.path, nested?: boolean): Promise<T[]> {
         if (this.nested && locPath === this.path) {
             nested = true
@@ -128,22 +198,14 @@ export class Loader<T, A = T> extends EventEmitter {
             throw new LoadFilesError(err, locPath)
         }
 
+        this.watch(locPath, nested)
+
         const instances: T[] = []
 
-        let extname: string
         let filePath: string
 
         for (let fileName of files) {
-            extname = path.extname(fileName)?.toLowerCase()
-
-            if (
-                (nested && extname) ||
-                (!nested && !this.allowedFileExts.includes(extname))
-            ) {
-                continue
-            }
-
-            if (this.ignored.includes(fileName)) {
+            if (!this.isFileValid(fileName, nested)) {
                 continue
             }
 
@@ -174,11 +236,7 @@ export class Loader<T, A = T> extends EventEmitter {
         return instances
     }
 
-    async loadFromPath(
-        filePath: string,
-        name?: string,
-        emit = true
-    ): Promise<T> {
+    async loadFromPath(filePath: string, name?: string): Promise<T> {
         let file
 
         try {
@@ -191,6 +249,12 @@ export class Loader<T, A = T> extends EventEmitter {
             name = this.extractNameFromFilePath(filePath)
         }
 
+        const oldInstance = this.fileMap.get(filePath)
+
+        if (oldInstance) {
+            this.classes?.destroy?.(oldInstance)
+        }
+
         let constructor: ConstructorType<T>
 
         if (
@@ -200,6 +264,10 @@ export class Loader<T, A = T> extends EventEmitter {
         ) {
             file = new constructor(...this.classes.params)
 
+            if (oldInstance) {
+                this.classes?.rebuild?.(file, oldInstance as unknown as A) // allows you to properly type the old instance how you want
+            }
+
             this.pathMap.set(processName(name), filePath) // note: this is case insensitive
             this.nameMap.set(file, name)
 
@@ -208,7 +276,9 @@ export class Loader<T, A = T> extends EventEmitter {
 
         this.fileMap.set(filePath, file)
 
-        if (emit !== false) {
+        if (oldInstance) {
+            this.emit('reload', file)
+        } else {
             this.emit('load', name, file)
         }
 
@@ -247,22 +317,16 @@ export class Loader<T, A = T> extends EventEmitter {
         return this.unloadFromPath(filePath)
     }
 
-    async reloadFromPath(filePath: string): Promise<T> {
+    reloadFromPath(filePath: string, autoLoad = true): Promise<T> {
         delete require.cache[filePath]
 
-        const oldInstance = this.unloadFromPath(filePath)
-        const newInstance = await this.loadFromPath(
-            filePath,
-            this.nameMap.get(oldInstance),
-            Boolean(oldInstance)
-        )
+        const oldInstance = this.fileMap.get(filePath)
 
-        if (oldInstance) {
-            this.classes?.rebuild?.(newInstance, oldInstance as unknown as A) // allows you to properly type the old instance how you want
-            this.emit('reload', newInstance)
+        if (oldInstance || autoLoad) {
+            return this.loadFromPath(filePath, this.nameMap.get(oldInstance))
         }
 
-        return newInstance
+        return Promise.resolve(null)
     }
 
     reload(name: string): Promise<T> {
@@ -275,11 +339,41 @@ export class Loader<T, A = T> extends EventEmitter {
         return this.reloadFromPath(filePath)
     }
 
+    watch(dir = this.path, nested = this.nested) {
+        if (!dir.endsWith(path.sep)) {
+            dir += path.sep
+        }
+
+        if (this.watcher) {
+            if (this.watchList.has(dir)) {
+                return
+            }
+
+            this.watchList.set(dir, nested)
+            this.watcher.add(dir)
+        }
+    }
+
+    unwatch(dir = this.path) {
+        if (!dir.endsWith(path.sep)) {
+            dir += path.sep
+        }
+
+        if (this.watcher) {
+            this.watchList.delete(dir)
+            this.watcher.unwatch(dir)
+        }
+    }
+
     onReady(cb: () => void) {
         if (this.ready) {
             cb()
         } else {
             this.once('ready', cb)
         }
+    }
+
+    async destroy() {
+        await this.watcher.close()
     }
 }

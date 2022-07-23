@@ -4,7 +4,7 @@ import { Loader, LoaderOptions } from '../src/loader'
 import { Person } from './types'
 
 const singleFilesPath = join(__dirname, 'files')
-const nestedFilesPath = join(__dirname, 'nesteda')
+const nestedFilesPath = join(__dirname, 'nested')
 
 const loaderOptions: LoaderOptions = {
     path: '/',

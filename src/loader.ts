@@ -17,7 +17,7 @@ export type ConstructorType<T> = new (...args: any[]) => T
 
 export interface ClassOptions<T = unknown, A = T> {
     instantiate?: boolean
-    params?: Array<unknown>
+    params?: unknown[]
     findConstructor?: (name: string, mdl: any) => ConstructorType<T> | null
     destroy?: (instance: T) => void
     rebuild?: (newInstance: T, oldInstance: A) => void
@@ -40,7 +40,7 @@ export interface LoaderOptions<T = unknown, A = T> {
     path: string
     nested?: boolean
     mainFile?: string | ((file: string) => string)
-    ignored?: Array<string>
+    ignored?: string[]
     autoLoad?: boolean
     classes?: ClassOptions<T, A>
     allowedFileExts?: string[]
@@ -168,6 +168,24 @@ export class Loader<T, A = T> extends EventEmitter {
             : path.basename(filePath, path.extname(filePath))
     }
 
+    private getMainFilePath(
+        fileName: string,
+        dir = this.path,
+        nested = this.nested
+    ): string {
+        fileName = path.join(dir, fileName)
+
+        if (nested) {
+            if (typeof this.mainFile === 'function') {
+                fileName = this.mainFile(fileName)
+            } else {
+                fileName = path.join(fileName, this.mainFile)
+            }
+        }
+
+        return fileName
+    }
+
     private isFileValid(file: string, nested = this.nested): boolean {
         const extname = path.extname(file)?.toLowerCase()
 
@@ -185,20 +203,20 @@ export class Loader<T, A = T> extends EventEmitter {
         return true
     }
 
-    async loadFiles(locPath = this.path, nested?: boolean): Promise<T[]> {
-        if (this.nested && locPath === this.path) {
+    async loadFiles(dir = this.path, nested?: boolean): Promise<T[]> {
+        if (this.nested && dir === this.path) {
             nested = true
         }
 
         let files: string[]
 
         try {
-            files = await fs.readdir(locPath)
+            files = await fs.readdir(dir)
         } catch (err) {
-            throw new LoadFilesError(err, locPath)
+            throw new LoadFilesError(err, dir)
         }
 
-        this.watch(locPath, nested)
+        this.watch(dir, nested)
 
         const instances: T[] = []
 
@@ -209,15 +227,7 @@ export class Loader<T, A = T> extends EventEmitter {
                 continue
             }
 
-            if (nested) {
-                if (typeof this.mainFile === 'function') {
-                    fileName = this.mainFile(fileName)
-                } else {
-                    fileName = path.join(fileName, this.mainFile)
-                }
-            }
-
-            filePath = path.join(locPath, fileName)
+            filePath = this.getMainFilePath(fileName, dir, nested)
 
             try {
                 instances.push(await this.loadFromPath(filePath))
@@ -277,7 +287,7 @@ export class Loader<T, A = T> extends EventEmitter {
         this.fileMap.set(filePath, file)
 
         if (oldInstance) {
-            this.emit('reload', file)
+            this.emit('reload', file, oldInstance)
         } else {
             this.emit('load', name, file)
         }
@@ -286,7 +296,7 @@ export class Loader<T, A = T> extends EventEmitter {
     }
 
     loadFromFileName(fileName: string): Promise<T> {
-        return this.loadFromPath(path.join(this.path, fileName))
+        return this.loadFromPath(this.getMainFilePath(fileName))
     }
 
     unloadFromPath(filePath: string): T | null {
@@ -339,7 +349,7 @@ export class Loader<T, A = T> extends EventEmitter {
         return this.reloadFromPath(filePath)
     }
 
-    watch(dir = this.path, nested = this.nested) {
+    protected watch(dir = this.path, nested = this.nested) {
         if (!dir.endsWith(path.sep)) {
             dir += path.sep
         }

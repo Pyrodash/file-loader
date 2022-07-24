@@ -20,7 +20,6 @@ export interface ClassOptions<T = unknown, A = T> {
     params?: unknown[]
     findConstructor?: (name: string, mdl: any) => ConstructorType<T> | null
     destroy?: (instance: T) => void
-    rebuild?: (newInstance: T, oldInstance: A) => void
 }
 
 const processName = (name: string) => name.toLowerCase()
@@ -44,8 +43,6 @@ export interface LoaderOptions<T = unknown, A = T> {
     autoLoad?: boolean
     classes?: ClassOptions<T, A>
     allowedFileExts?: string[]
-    watch?: boolean
-    watchOptions?: chokidar.WatchOptions
 }
 
 export class Loader<T, A = T> extends EventEmitter {
@@ -66,10 +63,6 @@ export class Loader<T, A = T> extends EventEmitter {
     // I'm not sure if this will work well at scale in terms of memory usage, but I can't think of other solutions
     private nameMap: Map<T, string> // Map<Instance, FileNameWithoutExt> - the instance is used as a key because object references are 8 bytes while a path will almost always be bigger than that
     private pathMap: Map<string, string> // Map<FileNameWithoutExt, FilePath>
-
-    private watchOptions: chokidar.WatchOptions
-    private watchList: Map<string, boolean> // map<Directory, IsNested>
-    private watcher: chokidar.FSWatcher
 
     public get files(): ReadonlyMap<string, T> {
         return this.fileMap
@@ -92,7 +85,6 @@ export class Loader<T, A = T> extends EventEmitter {
         this.classes = opts.classes || <ClassOptions<T, A>>defaultClassOptions
         this.allowedFileExts = opts.allowedFileExts || defaultAllowedExts
 
-        this.watchOptions = opts.watchOptions || defaultWatcherOptions
         this.ignored = opts.ignored || []
 
         this.fileMap = new Map()
@@ -103,50 +95,9 @@ export class Loader<T, A = T> extends EventEmitter {
             throw configError
         }
 
-        if (opts.watch) {
-            this.watchList = new Map()
-
-            this.createWatcher()
-        }
-
         if (opts.autoLoad !== false) {
             this.loadFiles()
         }
-    }
-
-    private createWatcher() {
-        this.watcher = chokidar.watch([], this.watchOptions)
-        this.watcher.on('change', (filePath) => {
-            let nested: boolean
-            let relPath: string
-
-            for (const dir of this.watchList.keys()) {
-                if (filePath.startsWith(dir)) {
-                    nested = this.watchList.get(dir)
-                    relPath = filePath.substring(dir.length, filePath.length)
-
-                    if (nested) {
-                        relPath = relPath.substring(
-                            0,
-                            relPath.indexOf(path.sep)
-                        )
-
-                        filePath = this.pathMap.get(relPath)
-                    } else if (
-                        relPath.indexOf(path.sep) !== -1 ||
-                        !this.isFileValid(relPath, nested)
-                    ) {
-                        break
-                    }
-
-                    if (filePath) {
-                        this.reloadFromPath(filePath, false)
-                    }
-
-                    break
-                }
-            }
-        })
     }
 
     private findConstructor(name: string, mdl: any): ConstructorType<T> | null {
@@ -216,8 +167,6 @@ export class Loader<T, A = T> extends EventEmitter {
             throw new LoadFilesError(err, dir)
         }
 
-        this.watch(dir, nested)
-
         const instances: T[] = []
 
         let filePath: string
@@ -273,10 +222,6 @@ export class Loader<T, A = T> extends EventEmitter {
                 'function'
         ) {
             file = new constructor(...this.classes.params)
-
-            if (oldInstance) {
-                this.classes?.rebuild?.(file, oldInstance as unknown as A) // allows you to properly type the old instance how you want
-            }
 
             this.pathMap.set(processName(name), filePath) // note: this is case insensitive
             this.nameMap.set(file, name)
@@ -349,41 +294,11 @@ export class Loader<T, A = T> extends EventEmitter {
         return this.reloadFromPath(filePath)
     }
 
-    protected watch(dir = this.path, nested = this.nested) {
-        if (!dir.endsWith(path.sep)) {
-            dir += path.sep
-        }
-
-        if (this.watcher) {
-            if (this.watchList.has(dir)) {
-                return
-            }
-
-            this.watchList.set(dir, nested)
-            this.watcher.add(dir)
-        }
-    }
-
-    unwatch(dir = this.path) {
-        if (!dir.endsWith(path.sep)) {
-            dir += path.sep
-        }
-
-        if (this.watcher) {
-            this.watchList.delete(dir)
-            this.watcher.unwatch(dir)
-        }
-    }
-
     onReady(cb: () => void) {
         if (this.ready) {
             cb()
         } else {
             this.once('ready', cb)
         }
-    }
-
-    async destroy() {
-        await this.watcher.close()
     }
 }

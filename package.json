@@ -4,7 +4,9 @@
   "description": "A runtime file loader for JavaScript/TypeScript with Hot Reloading support",
   "main": "dist/index.js",
   "scripts": {
-    "test": "jest"
+    "test": "jest",
+    "build": "tsc",
+    "prepare": "npm run build"
   },
   "repository": {
     "type": "git",

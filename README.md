@@ -69,7 +69,7 @@ await loader.loadFromFileName(name)
 await loader.loadFromPath(path)
 await loader.loadFromPath(path, name) // explicitly pass a name when loading a file that doesn't follow your configuration (e.g. your loader is in nested mode, but the path you're loading isn't meant to be named like such)
 
-// unloading files (note that this is only really async if you have an async destroy function configured)
+// unloading files
 await loader.unloadFromPath(path)
 await loader.unload(name)
 

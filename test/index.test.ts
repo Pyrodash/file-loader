@@ -169,8 +169,8 @@ describe('Loader', () => {
             await loader.loadFiles()
         })
 
-        it('can unload a file by name', () => {
-            loader.unload('a')
+        it('can unload a file by name', async () => {
+            await loader.unload('a')
 
             const { files } = loader
 
@@ -180,8 +180,8 @@ describe('Loader', () => {
             ])
         })
 
-        it('can unload a file by path', () => {
-            loader.unloadFromPath(join(singleFilesPath, 'a.ts'))
+        it('can unload a file by path', async () => {
+            await loader.unloadFromPath(join(singleFilesPath, 'a.ts'))
 
             const { files } = loader
 

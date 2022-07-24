@@ -2,7 +2,6 @@
 import path from 'path'
 import { promises as fs } from 'fs'
 import { EventEmitter } from 'events'
-import chokidar from 'chokidar'
 import {
     ConfigError,
     DestroyFileError,
@@ -28,10 +27,6 @@ const processName = (name: string) => name.toLowerCase()
 const defaultClassOptions: ClassOptions = {
     instantiate: true,
     params: [],
-}
-
-const defaultWatcherOptions: chokidar.WatchOptions = {
-    persistent: false,
 }
 
 const defaultAllowedExts = ['.js', '.ts']

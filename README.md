@@ -3,7 +3,9 @@
 A module that allows you to load files and instantiate classes dynamically at runtime, with support for hot reloading files.
 
 ## Install
-`npm install @pyrodash/file-loader`
+```sh
+npm install @pyrodash/file-loader
+```
 
 ## Notes
 
@@ -107,7 +109,7 @@ An array of filenames (folder names in case of nested mode, filenames otherwise)
 
 Whether or not the loader should immediately begin loading files automatically
 
-- `classes?`: [ClassOptions](#classoptions)
+- `classes?`: [ClassOptions](#classoptionst)
 - `allowedFileExts?`: string[]
 
 File extensions loaded by the loader

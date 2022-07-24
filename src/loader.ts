@@ -195,7 +195,17 @@ export class Loader<T, A = T> extends EventEmitter {
         return instances
     }
 
-    async loadFromPath(filePath: string, name?: string): Promise<T> {
+    async loadFromPath(
+        filePath: string,
+        name?: string,
+        emit = true
+    ): Promise<T> {
+        const oldInstance = this.fileMap.get(filePath)
+
+        if (oldInstance) {
+            return oldInstance
+        }
+
         let file
 
         try {
@@ -206,12 +216,6 @@ export class Loader<T, A = T> extends EventEmitter {
 
         if (!name) {
             name = this.extractNameFromFilePath(filePath)
-        }
-
-        const oldInstance = this.fileMap.get(filePath)
-
-        if (oldInstance) {
-            this.classes?.destroy?.(oldInstance)
         }
 
         let constructor: ConstructorType<T>
@@ -231,9 +235,7 @@ export class Loader<T, A = T> extends EventEmitter {
 
         this.fileMap.set(filePath, file)
 
-        if (oldInstance) {
-            this.emit('reload', file, oldInstance)
-        } else {
+        if (emit !== false) {
             this.emit('load', name, file)
         }
 
@@ -244,7 +246,7 @@ export class Loader<T, A = T> extends EventEmitter {
         return this.loadFromPath(this.getMainFilePath(fileName))
     }
 
-    unloadFromPath(filePath: string): T | null {
+    unloadFromPath(filePath: string, emit = true): T | null {
         const instance = this.fileMap.get(filePath)
 
         if (instance) {
@@ -256,7 +258,9 @@ export class Loader<T, A = T> extends EventEmitter {
             this.pathMap.delete(name)
             this.nameMap.delete(instance)
 
-            this.emit('unload', instance)
+            if (emit !== false) {
+                this.emit('unload', instance)
+            }
         }
 
         return instance
@@ -272,16 +276,24 @@ export class Loader<T, A = T> extends EventEmitter {
         return this.unloadFromPath(filePath)
     }
 
-    reloadFromPath(filePath: string, autoLoad = true): Promise<T> {
+    // note that reloads WILL trigger the unload event first
+    async reloadFromPath(filePath: string): Promise<T> {
         delete require.cache[filePath]
 
-        const oldInstance = this.fileMap.get(filePath)
+        const oldInstance = this.unloadFromPath(filePath, true)
+        let newInstance: T
 
-        if (oldInstance || autoLoad) {
-            return this.loadFromPath(filePath, this.nameMap.get(oldInstance))
+        if (oldInstance) {
+            newInstance = await this.loadFromPath(
+                filePath,
+                this.nameMap.get(oldInstance),
+                false
+            )
+
+            this.emit('reload', newInstance, oldInstance)
         }
 
-        return Promise.resolve(null)
+        return newInstance
     }
 
     reload(name: string): Promise<T> {

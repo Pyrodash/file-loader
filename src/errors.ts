@@ -21,34 +21,49 @@ export class FileNotFoundError extends Error {
     }
 }
 
-export class FileLoadError extends Error {
-    readonly name = 'FileLoadError'
-
+class ProxyError extends Error {
     readonly err: Error
-    readonly filePath: string
 
-    constructor(err: Error, filePath: string) {
-        super(err.message)
+    constructor(err: Error, message = err.message) {
+        super(message)
 
         this.err = err
-        this.filePath = filePath
-
         this.stack = createStackProxy(this.stack, err.stack)
     }
 }
 
-export class LoadFilesError extends Error {
-    readonly name = 'LoadFilesError'
+export class FileLoadError extends ProxyError {
+    readonly name = 'FileLoadError'
+    readonly filePath: string
 
-    readonly err: Error
+    constructor(err: Error, filePath: string) {
+        super(err)
+
+        this.filePath = filePath
+    }
+}
+
+export class LoadFilesError extends ProxyError {
+    readonly name = 'LoadFilesError'
     readonly path: string
 
     constructor(err: Error, path: string) {
-        super(err.message)
+        super(err)
 
-        this.err = err
         this.path = path
+    }
+}
 
-        this.stack = createStackProxy(this.stack, err.stack)
+export class DestroyFileError<T> extends ProxyError {
+    readonly name = 'DestroyFileError'
+
+    readonly path: string
+    readonly instance: T
+
+    constructor(err: Error, path: string, instance: T) {
+        super(err)
+
+        this.path = path
+        this.instance = instance
     }
 }

@@ -5,6 +5,7 @@ import { EventEmitter } from 'events'
 import chokidar from 'chokidar'
 import {
     ConfigError,
+    DestroyFileError,
     FileLoadError,
     FileNotFoundError,
     LoadFilesError,
@@ -19,7 +20,7 @@ export interface ClassOptions<T = unknown, A = T> {
     instantiate?: boolean
     params?: unknown[]
     findConstructor?: (name: string, mdl: any) => ConstructorType<T> | null
-    destroy?: (instance: T) => void
+    destroy?: (instance: T) => void | Promise<void>
 }
 
 const processName = (name: string) => name.toLowerCase()
@@ -246,13 +247,17 @@ export class Loader<T, A = T> extends EventEmitter {
         return this.loadFromPath(this.getMainFilePath(fileName))
     }
 
-    unloadFromPath(filePath: string, emit = true): T | null {
+    async unloadFromPath(filePath: string, emit = true): Promise<T | null> {
         const instance = this.fileMap.get(filePath)
 
         if (instance) {
             const name = this.nameMap.get(instance)
 
-            this.classes?.destroy?.(instance)
+            try {
+                await this.classes?.destroy?.(instance)
+            } catch (err) {
+                throw new DestroyFileError<T>(err, filePath, instance)
+            }
 
             this.fileMap.delete(filePath)
             this.pathMap.delete(name)
@@ -266,7 +271,7 @@ export class Loader<T, A = T> extends EventEmitter {
         return instance
     }
 
-    unload(name: string): T | null {
+    unload(name: string): Promise<T | null> {
         const filePath = this.findPathFromName(name)
 
         if (!filePath) {
@@ -277,10 +282,10 @@ export class Loader<T, A = T> extends EventEmitter {
     }
 
     // note that reloads WILL trigger the unload event first
-    async reloadFromPath(filePath: string): Promise<T> {
+    async reloadFromPath(filePath: string): Promise<T | null> {
         delete require.cache[filePath]
 
-        const oldInstance = this.unloadFromPath(filePath, true)
+        const oldInstance = await this.unloadFromPath(filePath, true)
         let newInstance: T
 
         if (oldInstance) {

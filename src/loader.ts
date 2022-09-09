@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import path from 'path'
-import { promises as fs } from 'fs'
+import { promises as fs, readdirSync } from 'fs'
 import { EventEmitter } from 'events'
 import {
     ConfigError,
@@ -150,6 +150,31 @@ export class Loader<T, A = T> extends EventEmitter {
         return true
     }
 
+    private initFile(name: string | null, filePath: string, file: any): T {
+        if (!name) {
+            name = this.extractNameFromFilePath(filePath)
+        }
+
+        let constructor: ConstructorType<T>
+
+        if (
+            this.classes.instantiate &&
+            typeof (constructor = this.findConstructor(name, file)) ===
+                'function'
+        ) {
+            file = new constructor(...this.classes.params)
+
+            this.pathMap.set(processName(name), filePath) // note: this is case insensitive
+            this.nameMap.set(file, name)
+
+            name = constructor.name
+        }
+
+        this.fileMap.set(filePath, file)
+
+        return file
+    }
+
     async loadFiles(dir = this.path, nested?: boolean): Promise<T[]> {
         if (this.nested && dir === this.path) {
             nested = true
@@ -191,6 +216,47 @@ export class Loader<T, A = T> extends EventEmitter {
         return instances
     }
 
+    loadFilesSync(dir = this.path, nested?: boolean): T[] {
+        if (this.nested && dir === this.path) {
+            nested = true
+        }
+
+        let files: string[]
+
+        try {
+            files = readdirSync(dir)
+        } catch (err) {
+            throw new LoadFilesError(err, dir)
+        }
+
+        const instances: T[] = []
+
+        let filePath: string
+
+        for (let fileName of files) {
+            if (!this.isFileValid(fileName, nested)) {
+                continue
+            }
+
+            filePath = this.getMainFilePath(fileName, dir, nested)
+
+            try {
+                instances.push(this.loadFromPathSync(filePath))
+            } catch (err) {
+                this.emit('error', err)
+            }
+        }
+
+        this.emit('load-many', instances)
+
+        if (!this._ready) {
+            this._ready = true
+            this.emit('ready')
+        }
+
+        return instances
+    }
+
     async loadFromPath(
         filePath: string,
         name?: string,
@@ -210,26 +276,31 @@ export class Loader<T, A = T> extends EventEmitter {
             throw new FileLoadError(err, filePath)
         }
 
-        if (!name) {
-            name = this.extractNameFromFilePath(filePath)
+        file = this.initFile(name, filePath, file)
+
+        if (emit !== false) {
+            this.emit('load', name, file)
         }
 
-        let constructor: ConstructorType<T>
+        return file
+    }
 
-        if (
-            this.classes.instantiate &&
-            typeof (constructor = this.findConstructor(name, file)) ===
-                'function'
-        ) {
-            file = new constructor(...this.classes.params)
+    loadFromPathSync(filePath: string, name?: string, emit = true): T {
+        const oldInstance = this.fileMap.get(filePath)
 
-            this.pathMap.set(processName(name), filePath) // note: this is case insensitive
-            this.nameMap.set(file, name)
-
-            name = constructor.name
+        if (oldInstance) {
+            return oldInstance
         }
 
-        this.fileMap.set(filePath, file)
+        let file
+
+        try {
+            file = require(filePath)
+        } catch (err) {
+            throw new FileLoadError(err, filePath)
+        }
+
+        file = this.initFile(name, filePath, file)
 
         if (emit !== false) {
             this.emit('load', name, file)
@@ -240,6 +311,10 @@ export class Loader<T, A = T> extends EventEmitter {
 
     loadFromFileName(fileName: string): Promise<T> {
         return this.loadFromPath(this.getMainFilePath(fileName))
+    }
+
+    loadFromFileNameSync(fileName: string): T {
+        return this.loadFromPathSync(this.getMainFilePath(fileName))
     }
 
     async unloadFromPath(filePath: string, emit = true): Promise<T | null> {

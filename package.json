@@ -1,6 +1,6 @@
 {
   "name": "@pyrodash/file-loader",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A runtime file loader for JavaScript/TypeScript with Hot Reloading support",
   "main": "dist/index.js",
   "scripts": {

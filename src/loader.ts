@@ -2,6 +2,7 @@
 import path from 'path'
 import { promises as fs, readdirSync } from 'fs'
 import { EventEmitter } from 'events'
+import chokidar from 'chokidar'
 import {
     ConfigError,
     DestroyFileError,
@@ -9,17 +10,20 @@ import {
     FileNotFoundError,
     LoadFilesError,
 } from './errors'
+import { detectESM } from './util'
+import Module from 'module'
 
 const fileExt = path.extname(__filename).toLowerCase()
 const configError = new ConfigError()
 
 export type ConstructorType<T> = new (...args: any[]) => T
 
-export interface ClassOptions<T = unknown, A = T> {
+export interface ClassOptions<T = unknown> {
     instantiate?: boolean
     params?: unknown[]
     findConstructor?: (name: string, mdl: any) => ConstructorType<T> | null
     destroy?: (instance: T) => void | Promise<void>
+    reload?: (newInstance: T, oldInstance: any) => void | Promise<void>
 }
 
 const processName = (name: string) => name.toLowerCase()
@@ -31,23 +35,24 @@ const defaultClassOptions: ClassOptions = {
 
 const defaultAllowedExts = ['.js', '.ts']
 
-export interface LoaderOptions<T = unknown, A = T> {
+export interface LoaderOptions<T = unknown> {
     path: string
     nested?: boolean
     mainFile?: string | ((file: string) => string)
     ignored?: string[]
     autoLoad?: boolean
-    classes?: ClassOptions<T, A>
+    classes?: ClassOptions<T>
     allowedFileExts?: string[]
+    watch?: boolean
 }
 
-export class Loader<T, A = T> extends EventEmitter {
+export class Loader<T> extends EventEmitter {
     private path: string
 
     private nested: boolean
     private mainFile: string | ((file: string) => string)
 
-    private classes: ClassOptions<T, A>
+    private classes: ClassOptions<T>
     private allowedFileExts: string[]
 
     protected ignored: string[]
@@ -60,25 +65,29 @@ export class Loader<T, A = T> extends EventEmitter {
     private nameMap: Map<T, string> // Map<Instance, FileNameWithoutExt> - the instance is used as a key because object references are 8 bytes while a path will almost always be bigger than that
     private pathMap: Map<string, string> // Map<FileNameWithoutExt, FilePath>
 
+    private watch: boolean
+    private watcher: chokidar.FSWatcher
+
     public get files(): ReadonlyMap<string, T> {
         return this.fileMap
     }
 
+    private isESM = detectESM()
     private _ready = false
 
     public get ready(): boolean {
         return this._ready
     }
 
-    constructor(opts: LoaderOptions<T, A>) {
+    constructor(opts: LoaderOptions<T>) {
         super()
 
-        this.path = opts.path
+        this.path = path.resolve(opts.path)
 
         this.nested = opts.nested
         this.mainFile = opts.mainFile || 'index' + fileExt
 
-        this.classes = opts.classes || <ClassOptions<T, A>>defaultClassOptions
+        this.classes = opts.classes || <ClassOptions<T>>defaultClassOptions
         this.allowedFileExts = opts.allowedFileExts || defaultAllowedExts
 
         this.ignored = opts.ignored || []
@@ -86,6 +95,12 @@ export class Loader<T, A = T> extends EventEmitter {
         this.fileMap = new Map()
         this.pathMap = new Map()
         this.nameMap = new Map()
+
+        this.watch = opts.watch
+
+        if (this.watch) {
+            this.setupWatcher()
+        }
 
         if (!this.path || (this.nested && !this.mainFile) || !this.files) {
             throw configError
@@ -150,10 +165,71 @@ export class Loader<T, A = T> extends EventEmitter {
         return true
     }
 
+    private shouldFindDependencies(filePath: string): boolean {
+        return filePath.startsWith(this.path)
+    }
+
+    private findDependencies(mdl: Module, deps: string[] = []): string[] {
+        if (this.shouldFindDependencies(mdl.id)) {
+            deps.push(mdl.id)
+
+            for (const child of mdl.children) {
+                this.findDependencies(child, deps)
+            }
+        }
+
+        return deps
+    }
+
+    private setupWatcher() {
+        this.watcher = chokidar.watch([])
+        this.watcher.on('all', (evt, srcPath) => {
+            let filePath = srcPath
+
+            if (this.nested) {
+                if (srcPath.indexOf(this.path) === 0) {
+                    const relativePath = srcPath.substring(
+                        this.path.length + path.sep.length,
+                        srcPath.length
+                    )
+
+                    const firstSepIndex = relativePath.indexOf(path.sep)
+
+                    if (firstSepIndex === -1) {
+                        filePath = srcPath
+                    } else {
+                        filePath = relativePath.slice(
+                            0,
+                            -relativePath.length + firstSepIndex
+                        )
+                    }
+                }
+            }
+
+            if (this.fileMap.has(filePath)) {
+                this.reloadFromPath(filePath)
+            }
+        })
+    }
+
+    private getWatchPath(filePath: string): string {
+        return this.nested ? path.dirname(filePath) : filePath
+    }
+
+    private async importFile(filePath: string): Promise<any> {
+        return await import(filePath)
+    }
+
+    private importFileSync(filePath: string): any {
+        return require(filePath)
+    }
+
     private initFile(name: string | null, filePath: string, file: any): T {
         if (!name) {
             name = this.extractNameFromFilePath(filePath)
         }
+
+        this.watcher?.add(this.getWatchPath(filePath))
 
         let constructor: ConstructorType<T>
 
@@ -271,7 +347,7 @@ export class Loader<T, A = T> extends EventEmitter {
         let file
 
         try {
-            file = await import(filePath)
+            file = await this.importFile(filePath)
         } catch (err) {
             throw new FileLoadError(err, filePath)
         }
@@ -295,7 +371,7 @@ export class Loader<T, A = T> extends EventEmitter {
         let file
 
         try {
-            file = require(filePath)
+            file = this.importFileSync(filePath)
         } catch (err) {
             throw new FileLoadError(err, filePath)
         }
@@ -321,6 +397,8 @@ export class Loader<T, A = T> extends EventEmitter {
         const instance = this.fileMap.get(filePath)
 
         if (instance) {
+            this.watcher?.unwatch(this.getWatchPath(filePath))
+
             const name = this.nameMap.get(instance)
 
             try {
@@ -364,6 +442,8 @@ export class Loader<T, A = T> extends EventEmitter {
                 this.nameMap.get(oldInstance),
                 false
             )
+
+            await this.classes.reload?.(newInstance, oldInstance)
 
             this.emit('reload', newInstance, oldInstance)
         }

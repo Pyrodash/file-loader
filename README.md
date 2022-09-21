@@ -114,6 +114,10 @@ Whether or not the loader should immediately begin loading files automatically
 
 File extensions loaded by the loader
 
+- `watch?`: boolean (experimental)
+
+Whether or not to watch loaded files for changes and automatically reload them 
+
 #### Defaults
 ```js
 {
@@ -145,6 +149,10 @@ A function to extract a constructor from a module's exports
 - `destroy?`: (instance: T) => void | Promise[void]
 
 A function to destroy/deconstruct an instance when it's being unloaded
+
+- `reload?`: (newInstance: T, oldInstance: any) => void | Promise[void]
+
+A function to rebuild a reloaded instance with the data of the old instance
 
 ## TODO
 - Improve unit tests

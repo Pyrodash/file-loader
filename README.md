@@ -82,6 +82,7 @@ await loader.reload(name)
 // events
 loader.on('ready', () => ...) // emitted after first initial loading
 loader.on('error', (err) => ...)
+loader.on('warning', (err) => ...)
 loader.on('load-many', (files) => ...) // emitted after loadFiles() runs
 loader.on('load', (name, file) => ...)
 loader.on('unload', (file) => ...)

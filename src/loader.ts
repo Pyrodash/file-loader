@@ -278,7 +278,12 @@ export class Loader<T> extends EventEmitter {
             try {
                 instances.push(await this.loadFromPath(filePath))
             } catch (err) {
-                this.emit('error', err)
+                // emit a warning instead of an error
+                if (err instanceof FileNotFoundError) {
+                    this.emit('warning', err)
+                } else {
+                    this.emit('error', err)
+                }
             }
         }
 
@@ -319,8 +324,10 @@ export class Loader<T> extends EventEmitter {
             try {
                 instances.push(this.loadFromPathSync(filePath))
             } catch (err) {
-                // ignore errors when trying to load an empty folder
-                if (!(err instanceof FileNotFoundError)) {
+                // emit a warning instead of an error
+                if (err instanceof FileNotFoundError) {
+                    this.emit('warning', err)
+                } else {
                     this.emit('error', err)
                 }
             }

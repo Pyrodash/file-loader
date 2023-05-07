@@ -319,7 +319,10 @@ export class Loader<T> extends EventEmitter {
             try {
                 instances.push(this.loadFromPathSync(filePath))
             } catch (err) {
-                this.emit('error', err)
+                // ignore errors when trying to load an empty folder
+                if (!(err instanceof FileNotFoundError)) {
+                    this.emit('error', err)
+                }
             }
         }
 
@@ -349,7 +352,11 @@ export class Loader<T> extends EventEmitter {
         try {
             file = await this.importFile(filePath)
         } catch (err) {
-            throw new FileLoadError(err, filePath)
+            if (err.code === 'MODULE_NOT_FOUND') {
+                throw new FileNotFoundError(filePath)
+            } else {
+                throw new FileLoadError(err, filePath)
+            }
         }
 
         file = this.initFile(name, filePath, file)
@@ -373,7 +380,11 @@ export class Loader<T> extends EventEmitter {
         try {
             file = this.importFileSync(filePath)
         } catch (err) {
-            throw new FileLoadError(err, filePath)
+            if (err.code === 'MODULE_NOT_FOUND') {
+                throw new FileNotFoundError(filePath)
+            } else {
+                throw new FileLoadError(err, filePath)
+            }
         }
 
         file = this.initFile(name, filePath, file)
